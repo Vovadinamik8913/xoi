@@ -23,6 +23,6 @@
 hs_err_pid*
 replay_pid*
 
-sync_list/.gradle
-sync_list/.idea
-sync_list/build
+*/.gradle
+*/.idea
+*/build
