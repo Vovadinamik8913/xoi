@@ -1,0 +1,10 @@
+server:
+  port: 8080
+
+threading:
+  generationThreads: 10
+
+certificate:
+  caKeyFile: "ca.p12"
+  issuerName: "CN=My CA"
+  caKeyPassword: "changeit"

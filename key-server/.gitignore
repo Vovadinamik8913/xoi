@@ -1,0 +1,7 @@
+cli/.gradle
+cli/build
+cli/.idea
+
+srv/.gradle
+srv/build
+srv/.idea

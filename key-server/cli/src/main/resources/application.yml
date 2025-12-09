@@ -1,0 +1,14 @@
+server:
+  address: "localhost"
+  port: 8080
+
+client:
+  name: "vovik"
+  count: 25
+  isRandomDelay: false
+  isRandomName: true
+
+delay:
+  sendSeconds: 1
+  readSeconds: 1
+  exitBeforeReading: false
