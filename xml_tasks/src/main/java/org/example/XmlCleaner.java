@@ -1,13 +1,18 @@
 package org.example;
 
+import jakarta.xml.bind.JAXBContext;
+import jakarta.xml.bind.Marshaller;
+import org.example.mapper.Mapper;
 import org.example.model.Gender;
-import org.example.model.Person;
+import org.example.entity.PersonData;
+import org.example.model.People;
 
+import javax.xml.XMLConstants;
 import javax.xml.stream.*;
+import javax.xml.validation.SchemaFactory;
 import java.io.BufferedInputStream;
-import java.io.BufferedOutputStream;
+import java.io.File;
 import java.io.InputStream;
-import java.io.OutputStream;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.*;
@@ -22,53 +27,40 @@ public class XmlCleaner {
         Path out = Path.of(outputPath);
         Files.createDirectories(out.getParent());
 
-        Map<String, Person> people = parsePeople(in);
+        
+        List<PersonData> personList = parsePeopleToList(in);
+
+        
+        Merger merger = new Merger();
+        Map<String, PersonData> people = merger.mergePersons(personList);
+
         writeConsolidated(out, people);
 
         System.out.println("Parsed people (by id/name): " + people.size());
         System.out.println("Wrote: " + out.toAbsolutePath());
     }
 
-    private static Map<String, Person> parsePeople(Path input) throws Exception {
+    private static List<PersonData> parsePeopleToList(Path input) throws Exception {
+        List<PersonData> result = new ArrayList<>();
         XMLInputFactory f = XMLInputFactory.newInstance();
-        Map<String, Person> byId = new LinkedHashMap<>();
-        Map<String, Person> byName = new LinkedHashMap<>();
 
         try (InputStream is = new BufferedInputStream(Files.newInputStream(input))) {
             XMLStreamReader r = f.createXMLStreamReader(is);
             while (r.hasNext()) {
                 int ev = r.next();
                 if (ev == XMLStreamConstants.START_ELEMENT && r.getLocalName().equals("person")) {
-                    Person p = readPerson(r);
-                    mergePerson(p, byId, byName);
+                    PersonData p = readPerson(r);
+                    result.add(p);
                 }
             }
             r.close();
         }
 
-        for (Iterator<Map.Entry<String, Person>> it = byName.entrySet().iterator(); it.hasNext();) {
-            Map.Entry<String, Person> e = it.next();
-            Person p = e.getValue();
-            String keyName = e.getKey();
-            Person target = findByBestName(byId, keyName);
-            if (target != null) {
-                mergeInto(target, p);
-                it.remove();
-            }
-        }
-
-        int anon = 1;
-        for (Person p : byName.values()) {
-            if (p.getId() == null) {
-                p.setId("ANON_" + (anon++));
-            }
-            byId.put(p.getId(), p);
-        }
-        return byId;
+        return result;
     }
 
-    private static Person readPerson(XMLStreamReader r) throws XMLStreamException {
-        Person p = new Person();
+    private static PersonData readPerson(XMLStreamReader r) throws XMLStreamException {
+        PersonData p = new PersonData();
 
         String attrId = attr(r, "id");
         if (isMeaningful(attrId)) p.setId(attrId);
@@ -84,7 +76,7 @@ public class XmlCleaner {
                     case "id": {
                         String v = attr(r, "value");
                         if (isMeaningful(v)) p.setId(v);
-                        String text = safeElementText(r); // consumes to END_ELEMENT id
+                        String text = safeElementText(r); 
                         if (isMeaningful(text)) p.setId(text);
                         break;
                     }
@@ -186,7 +178,7 @@ public class XmlCleaner {
         return p;
     }
 
-    private static void readFullname(XMLStreamReader r, Person p) throws XMLStreamException {
+    private static void readFullname(XMLStreamReader r, PersonData p) throws XMLStreamException {
         String first = null, last = null;
         int depth = 1;
         while (r.hasNext() && depth > 0) {
@@ -210,7 +202,7 @@ public class XmlCleaner {
         if (isMeaningful(full)) p.getFullNames().add(full);
     }
 
-    private static void readSiblingsBlock(XMLStreamReader r, Person p) throws XMLStreamException {
+    private static void readSiblingsBlock(XMLStreamReader r, PersonData p) throws XMLStreamException {
         int depth = 1;
         while (r.hasNext() && depth > 0) {
             int ev = r.next();
@@ -234,7 +226,7 @@ public class XmlCleaner {
         }
     }
 
-    private static void readChildrenBlock(XMLStreamReader r, Person p) throws XMLStreamException {
+    private static void readChildrenBlock(XMLStreamReader r, PersonData p) throws XMLStreamException {
         int depth = 1;
         while (r.hasNext() && depth > 0) {
             int ev = r.next();
@@ -261,10 +253,10 @@ public class XmlCleaner {
         }
     }
 
-    private static void mergePerson(Person incoming, Map<String, Person> byId, Map<String, Person> byName) {
+    private static void mergePerson(PersonData incoming, Map<String, PersonData> byId, Map<String, PersonData> byName) {
         String bestName = incoming.bestFull();
         if (isMeaningful(incoming.getId())) {
-            Person target = byId.get(incoming.getId());
+            PersonData target = byId.get(incoming.getId());
             if (target == null) {
                 target = incoming;
                 byId.put(target.getId(), target);
@@ -272,12 +264,12 @@ public class XmlCleaner {
                 mergeInto(target, incoming);
             }
             if (isMeaningful(bestName)) {
-                Person nameOnly = byName.remove(normalizeKey(bestName));
+                PersonData nameOnly = byName.remove(normalizeKey(bestName));
                 if (nameOnly != null) mergeInto(target, nameOnly);
             }
         } else if (isMeaningful(bestName)) {
             String key = normalizeKey(bestName);
-            Person target = byName.get(key);
+            PersonData target = byName.get(key);
             if (target == null) byName.put(key, incoming);
             else mergeInto(target, incoming);
         } else {
@@ -286,7 +278,7 @@ public class XmlCleaner {
         }
     }
 
-    private static void mergeInto(Person target, Person src) {
+    private static void mergeInto(PersonData target, PersonData src) {
         if (target.getId() == null && src.getId() != null) target.setId(src.getId());
 
         target.getFirstNames().addAll(src.getFirstNames());
@@ -316,105 +308,30 @@ public class XmlCleaner {
         if (target.getExpectedSiblings() == null) target.setExpectedSiblings(src.getExpectedSiblings());
     }
 
-    private static Person findByBestName(Map<String, Person> byId, String bestNameKey) {
-        for (Person p : byId.values()) {
+    private static PersonData findByBestName(Map<String, PersonData> byId, String bestNameKey) {
+        for (PersonData p : byId.values()) {
             String best = p.bestFull();
             if (isMeaningful(best) && normalizeKey(best).equals(bestNameKey)) return p;
         }
         return null;
     }
 
-    private static void writeConsolidated(Path output, Map<String, Person> people) throws Exception {
-        XMLOutputFactory of = XMLOutputFactory.newInstance();
-        try (OutputStream os = new BufferedOutputStream(Files.newOutputStream(output))) {
-            XMLStreamWriter w = of.createXMLStreamWriter(os, "UTF-8");
-            w.writeStartDocument("UTF-8", "1.0");
-            w.writeStartElement("people");
-            w.writeAttribute("count", String.valueOf(people.size()));
+    private static void writeConsolidated(Path output, Map<String, PersonData> people) throws Exception {
+        People result = Mapper.toPeople(people);
 
-            List<Person> list = new ArrayList<>(people.values());
-            list.sort(Comparator.comparing(p -> p.getId() == null ? "" : p.getId()));
+        var ctx = JAXBContext.newInstance(People.class);
+        SchemaFactory schemaFactory = SchemaFactory.newInstance(XMLConstants.W3C_XML_SCHEMA_NS_URI);
+        var schema = schemaFactory.newSchema(new File("src/main/resources/people.xsd"));
 
-            for (Person p : list) {
-                w.writeStartElement("person");
-                if (isMeaningful(p.getId())) w.writeAttribute("id", p.getId());
+        Marshaller marshaller = ctx.createMarshaller();
+        marshaller.setProperty(Marshaller.JAXB_FORMATTED_OUTPUT, Boolean.TRUE);
+        marshaller.setProperty(Marshaller.JAXB_ENCODING, "UTF-8");
 
-                String full = p.bestFull();
-                String first = p.bestFirst();
-                String last = p.bestLast();
-                if (isMeaningful(full) || isMeaningful(first) || isMeaningful(last)) {
-                    w.writeStartElement("name");
-                    if (isMeaningful(first)) writeSimple(w, "first", first);
-                    if (isMeaningful(last)) writeSimple(w, "last", last);
-                    if (isMeaningful(full)) writeSimple(w, "full", full);
-                    w.writeEndElement();
-                }
-
-                Gender g = p.resolvedGender();
-                w.writeEmptyElement("gender");
-                w.writeAttribute("value", genderToString(g));
-
-                if (!p.getSpouseIds().isEmpty() || !p.getSpouseNames().isEmpty()) {
-                    w.writeStartElement("spouses");
-                    for (String sid : p.getSpouseIds()) { w.writeEmptyElement("spouse"); w.writeAttribute("id", sid); }
-                    for (String sn : p.getSpouseNames()) writeSimple(w, "spouse", sn);
-                    w.writeEndElement();
-                }
-
-                if (!p.getParentIds().isEmpty() || !p.getParentNames().isEmpty()) {
-                    w.writeStartElement("parents");
-                    for (String pid : p.getParentIds()) { w.writeEmptyElement("parent"); w.writeAttribute("id", pid); }
-                    for (String pn : p.getParentNames()) writeSimple(w, "parent", pn);
-                    w.writeEndElement();
-                }
-
-                if (!p.getSonIds().isEmpty() || !p.getDaughterIds().isEmpty() || !p.getChildIds().isEmpty() ||
-                        !p.getSonNames().isEmpty() || !p.getDaughterNames().isEmpty() || !p.getChildNames().isEmpty()) {
-                    w.writeStartElement("children");
-                    for (String id : p.getSonIds()) { w.writeEmptyElement("son"); w.writeAttribute("id", id); }
-                    for (String id : p.getDaughterIds()) { w.writeEmptyElement("daughter"); w.writeAttribute("id", id); }
-                    for (String id : p.getChildIds()) { w.writeEmptyElement("child"); w.writeAttribute("id", id); }
-                    for (String nm : p.getSonNames()) writeSimple(w, "son", nm);
-                    for (String nm : p.getDaughterNames()) writeSimple(w, "daughter", nm);
-                    for (String nm : p.getChildNames()) writeSimple(w, "child", nm);
-                    w.writeEndElement();
-                }
-
-                if (!p.getSiblingIds().isEmpty() || !p.getBrotherNames().isEmpty() || !p.getSisterNames().isEmpty() || !p.getSiblingNames().isEmpty()) {
-                    w.writeStartElement("siblings");
-                    for (String sid : p.getSiblingIds()) {
-                        Person sib = people.get(sid);
-                        Gender sg = sib != null ? sib.resolvedGender() : Gender.UNKNOWN;
-                        String tag = (sg == Gender.MALE) ? "brother" : (sg == Gender.FEMALE ? "sister" : "sibling");
-                        w.writeEmptyElement(tag);
-                        w.writeAttribute("id", sid);
-                    }
-                    for (String nm : p.getBrotherNames()) writeSimple(w, "brother", nm);
-                    for (String nm : p.getSisterNames()) writeSimple(w, "sister", nm);
-                    for (String nm : p.getSiblingNames()) writeSimple(w, "sibling", nm);
-                    w.writeEndElement();
-                }
-
-                if (p.getExpectedChildren() != null || p.getExpectedSiblings() != null) {
-                    w.writeEmptyElement("expected");
-                    if (p.getExpectedChildren() != null) w.writeAttribute("children", String.valueOf(p.getExpectedChildren()));
-                    if (p.getExpectedSiblings() != null) w.writeAttribute("siblings", String.valueOf(p.getExpectedSiblings()));
-                }
-
-                w.writeEndElement();
-            }
-
-            w.writeEndElement();
-            w.writeEndDocument();
-            w.flush();
-            w.close();
+        if (schema != null) {
+            marshaller.setSchema(schema);
         }
-    }
 
-    private static void writeSimple(XMLStreamWriter w, String tag, String text) throws XMLStreamException {
-        w.writeStartElement(tag);
-        w.writeCharacters(text);
-        w.writeEndElement();
+        marshaller.marshal(result, new File(output.toString()));
     }
 
     private static String attr(XMLStreamReader r, String name) {
@@ -473,15 +390,6 @@ public class XmlCleaner {
         if (s.equals("m") || s.equals("male")) return Gender.MALE;
         if (s.equals("f") || s.equals("female")) return Gender.FEMALE;
         return Gender.UNKNOWN;
-    }
-
-    private static String genderToString(Gender g) {
-        if (g == null) return "unknown";
-        switch (g) {
-            case MALE: return "male";
-            case FEMALE: return "female";
-            default: return "unknown";
-        }
     }
 
     private static String safeElementText(XMLStreamReader r) throws XMLStreamException {
